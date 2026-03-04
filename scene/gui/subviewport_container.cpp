@@ -90,8 +90,9 @@ void SubViewportContainer::recalc_force_viewport_sizes() {
 		if (!c) {
 			continue;
 		}
-
-		c->set_size_force(get_size() / shrink);
+		// Window *w = get_parent_window();
+		// real_t p_oversampling
+		c->set_size_force(get_size() / shrink * p_oversampling);
 	}
 }
 
