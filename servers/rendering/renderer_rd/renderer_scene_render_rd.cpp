@@ -1174,6 +1174,12 @@ void RendererSceneRenderRD::gi_set_use_half_resolution(bool p_enable) {
 	gi.half_resolution = p_enable;
 }
 
+void RendererSceneRenderRD::screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) {
+	ERR_FAIL_INDEX_MSG(p_mode, RSE::SCREEN_TEXTURE_COPY_MODE_MAX, "Invalid screen texture copy mode, please see RenderingServer's ScreenTextureCopyMode enum.");
+
+	screen_texture_copy_mode = p_mode;
+}
+
 void RendererSceneRenderRD::positional_soft_shadow_filter_set_quality(RSE::ShadowQuality p_quality) {
 	ERR_FAIL_INDEX_MSG(p_quality, RSE::SHADOW_QUALITY_MAX, "Shadow quality too high, please see RenderingServer's ShadowQuality enum");
 
@@ -1843,6 +1849,9 @@ void RendererSceneRenderRD::init() {
 	environment_set_volumetric_fog_volume_size(GLOBAL_GET("rendering/environment/volumetric_fog/volume_size"), GLOBAL_GET("rendering/environment/volumetric_fog/volume_depth"));
 	environment_set_volumetric_fog_filter_active(GLOBAL_GET("rendering/environment/volumetric_fog/use_filter"));
 	fog_use_legacy_blending = GLOBAL_GET("rendering/environment/fog/use_legacy_blending");
+
+	// Explicitly qualified: this runs from a constructor, where virtual dispatch would not reach an override.
+	RendererSceneRenderRD::screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode(int(GLOBAL_GET("rendering/transparency/screen_texture/copy_mode"))));
 
 	decals_set_filter(RSE::DecalFilter(int(GLOBAL_GET("rendering/textures/decals/filter"))));
 	light_projectors_set_filter(RSE::LightProjectorFilter(int(GLOBAL_GET("rendering/textures/light_projectors/filter"))));

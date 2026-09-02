@@ -3682,6 +3682,11 @@ void TextureStorage::render_target_copy_to_back_buffer(RID p_render_target, cons
 	ERR_FAIL_NULL(rt);
 	ERR_FAIL_COND(rt->direct_to_screen);
 
+	// The 2D back buffer is always a plain GL_TEXTURE_2D, while rt->color is a GL_TEXTURE_2D_ARRAY under
+	// multiview. This is unreachable today because RendererViewport::_draw_viewport skips 2D entirely for
+	// stereo viewports, but without this guard relaxing that would silently produce GL_INVALID_OPERATION.
+	ERR_FAIL_COND_MSG(rt->view_count > 1, "The 2D back buffer does not support multiview rendering.");
+
 	if (rt->backbuffer_fbo == 0) {
 		_create_render_target_backbuffer(rt);
 	}

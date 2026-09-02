@@ -539,6 +539,9 @@ void EditorNode::_update_from_settings() {
 	bool use_half_res_gi = GLOBAL_GET("rendering/global_illumination/gi/use_half_resolution");
 	RS::get_singleton()->gi_set_use_half_resolution(use_half_res_gi);
 
+	RSE::ScreenTextureCopyMode screen_texture_copy_mode = RSE::ScreenTextureCopyMode(int(GLOBAL_GET("rendering/transparency/screen_texture/copy_mode")));
+	RS::get_singleton()->screen_texture_set_copy_mode(screen_texture_copy_mode);
+
 	bool snap_2d_transforms = GLOBAL_GET("rendering/2d/snap/snap_2d_transforms_to_pixel");
 	scene_root->set_snap_2d_transforms_to_pixel(snap_2d_transforms);
 	bool snap_2d_vertices = GLOBAL_GET("rendering/2d/snap/snap_2d_vertices_to_pixel");

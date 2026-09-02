@@ -3515,6 +3515,16 @@
 		<member name="rendering/textures/webp_compression/lossless_compression_factor" type="float" setter="" getter="" default="25">
 			The default compression factor for lossless WebP. Decompression speed is mostly unaffected by the compression factor. Supported values are 0 to 100.
 		</member>
+		<member name="rendering/transparency/screen_texture/copy_mode" type="int" setter="" getter="" default="0">
+			Controls how often the screen texture (sampled in shaders through the [code]hint_screen_texture[/code] uniform hint) is copied while transparent geometry is being drawn.
+			[b]Default:[/b] the screen texture is copied once, just before the transparent pass begins. Transparent surfaces therefore only see opaque geometry through it, never each other. This is Godot's normal behavior and by far the fastest option.
+			[b]Per Mesh:[/b] the screen texture is copied again before each geometry instance (such as a [MeshInstance3D]) that samples it, so overlapping transparent meshes can see each other. Surfaces belonging to the same instance still share a single copy.
+			[b]Per Draw Call:[/b] the screen texture is copied again before each individual surface that samples it, so overlapping surfaces of the same mesh can also see each other. This is the most accurate and the most expensive option.
+			[b]Note:[/b] All three renderers support this setting, but the cost differs. On Forward+ and Mobile, every copy splits the transparent render pass in two; on Mobile this additionally stores and reloads the whole tile on tile-based GPUs, making it considerably more expensive than on desktop. On Compatibility a copy is a single framebuffer blit with no pass split.
+			[b]Note:[/b] On Forward+ and Mobile each copy also rebuilds the screen texture's mipmap chain, once per view. Conversely, the Compatibility renderer never generates mipmaps for the 3D screen texture, so [code]textureLod()[/code] on it always samples the base level regardless of this setting. Scenes with many screen-reading transparent objects, and stereoscopic (XR) rendering in particular, will be significantly slower in any mode other than Default.
+			[b]Note:[/b] Copies are never made per [MultiMesh] instance, so instances within a single [MultiMeshInstance3D] cannot see each other through the screen texture in any mode.
+			[b]Note:[/b] This property is only read when the project starts. To change the copy mode at run-time, call [method RenderingServer.screen_texture_set_copy_mode] instead.
+		</member>
 		<member name="rendering/viewport/hdr_2d" type="bool" setter="" getter="" default="false">
 			If [code]true[/code], enables [member Viewport.use_hdr_2d] on the root Viewport. 2D rendering will use a high dynamic range (HDR) [code]RGBA16[/code] format framebuffer. Additionally, 2D rendering will be performed on linear values and will be converted using the appropriate transfer function immediately before blitting to the screen.
 			Practically speaking, this means that the end result of the Viewport will not be clamped to the [code]0-1[/code] range and can be used in 3D rendering without color encoding adjustments. This allows 2D rendering to take advantage of effects requiring high dynamic range (e.g. 2D glow) as well as substantially improves the appearance of effects requiring highly detailed gradients.

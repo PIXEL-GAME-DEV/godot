@@ -2696,6 +2696,15 @@ void RenderingServer::_bind_methods() {
 	BIND_ENUM_CONSTANT(RSE::VOXEL_GI_QUALITY_LOW);
 	BIND_ENUM_CONSTANT(RSE::VOXEL_GI_QUALITY_HIGH);
 
+	/* TRANSPARENCY API */
+
+	ClassDB::bind_method(D_METHOD("screen_texture_set_copy_mode", "mode"), &RenderingServer::screen_texture_set_copy_mode);
+
+	BIND_ENUM_CONSTANT(RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT);
+	BIND_ENUM_CONSTANT(RSE::SCREEN_TEXTURE_COPY_MODE_PER_MESH);
+	BIND_ENUM_CONSTANT(RSE::SCREEN_TEXTURE_COPY_MODE_PER_DRAW_CALL);
+	BIND_ENUM_CONSTANT(RSE::SCREEN_TEXTURE_COPY_MODE_MAX);
+
 	/* LIGHTMAP */
 
 	ClassDB::bind_method(D_METHOD("lightmap_create"), &RenderingServer::lightmap_create);
@@ -3710,6 +3719,8 @@ void RenderingServer::init() {
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/reflections/reflection_atlas/reflection_size.mobile", PROPERTY_HINT_RANGE, "4,2048,1"), 128);
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/reflections/reflection_atlas/reflection_count", PROPERTY_HINT_RANGE, "1,256,1"), 64);
 	GLOBAL_DEF_RST("rendering/reflections/specular_occlusion/enabled", true);
+
+	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/transparency/screen_texture/copy_mode", PROPERTY_HINT_ENUM, "Default (Fast),Per Mesh (Slow),Per Draw Call (Slowest)"), 0);
 
 	GLOBAL_DEF("rendering/global_illumination/gi/use_half_resolution", false);
 

@@ -5157,6 +5157,12 @@ void TextureStorage::render_target_copy_to_back_buffer(RID p_render_target, cons
 
 	RenderTarget *rt = render_target_owner.get_or_null(p_render_target);
 	ERR_FAIL_NULL(rt);
+
+	// The 2D back buffer is created as a plain TEXTURE_TYPE_2D, while rt->color has one array layer per view.
+	// This is unreachable today because RendererViewport::_draw_viewport skips 2D entirely for stereo
+	// viewports; supporting it would need a layered back buffer and a multiview canvas shader.
+	ERR_FAIL_COND_MSG(rt->view_count > 1, "The 2D back buffer does not support multiview rendering.");
+
 	if (!rt->backbuffer.is_valid()) {
 		_create_render_target_backbuffer(rt);
 	}

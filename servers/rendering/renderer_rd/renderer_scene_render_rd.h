@@ -130,6 +130,10 @@ private:
 	RSE::ViewportDebugDraw debug_draw = RSE::VIEWPORT_DEBUG_DRAW_DISABLED;
 	static RendererSceneRenderRD *singleton;
 
+	// How often the screen texture is refreshed during the transparent pass. Only acted on by the
+	// Forward+ renderer; the Mobile renderer stores it but always behaves as if it were DEFAULT.
+	RSE::ScreenTextureCopyMode screen_texture_copy_mode = RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT;
+
 	/* Shadow atlas */
 	RSE::ShadowQuality shadows_quality = RSE::SHADOW_QUALITY_MAX; //So it always updates when first set
 	RSE::ShadowQuality directional_shadow_quality = RSE::SHADOW_QUALITY_MAX;
@@ -244,6 +248,9 @@ public:
 	virtual bool _render_buffers_can_be_storage();
 	virtual Ref<RenderSceneBuffers> render_buffers_create() override;
 	virtual void gi_set_use_half_resolution(bool p_enable) override;
+
+	virtual void screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) override;
+	_FORCE_INLINE_ RSE::ScreenTextureCopyMode get_screen_texture_copy_mode() const { return screen_texture_copy_mode; }
 
 	RID render_buffers_get_default_voxel_gi_buffer();
 

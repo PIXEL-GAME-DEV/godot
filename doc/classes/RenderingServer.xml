@@ -3617,6 +3617,14 @@
 				Sets the screen-space roughness limiter parameters, such as whether it should be enabled and its thresholds. Equivalent to [member ProjectSettings.rendering/anti_aliasing/screen_space_roughness_limiter/enabled], [member ProjectSettings.rendering/anti_aliasing/screen_space_roughness_limiter/amount] and [member ProjectSettings.rendering/anti_aliasing/screen_space_roughness_limiter/limit].
 			</description>
 		</method>
+		<method name="screen_texture_set_copy_mode">
+			<return type="void" />
+			<param index="0" name="mode" type="int" enum="RenderingServer.ScreenTextureCopyMode" />
+			<description>
+				Sets how often the screen texture (sampled in shaders through the [code]hint_screen_texture[/code] uniform hint) is copied while transparent geometry is being drawn. This parameter is global and cannot be set on a per-material basis. Equivalent to [member ProjectSettings.rendering/transparency/screen_texture/copy_mode], which provides the initial value.
+				All three renderers honor this setting, but the cost of a non-default mode differs between them. See [member ProjectSettings.rendering/transparency/screen_texture/copy_mode] for the per-renderer caveats.
+			</description>
+		</method>
 		<method name="set_boot_image" deprecated="Use [method set_boot_image_with_stretch] instead.">
 			<return type="void" />
 			<param index="0" name="image" type="Image" />
@@ -5254,6 +5262,18 @@
 		</constant>
 		<constant name="VOXEL_GI_QUALITY_HIGH" value="1" enum="VoxelGIQuality">
 			High [VoxelGI] rendering quality using 6 cones.
+		</constant>
+		<constant name="SCREEN_TEXTURE_COPY_MODE_DEFAULT" value="0" enum="ScreenTextureCopyMode">
+			Copy the screen texture once, just before the transparent pass begins. Transparent surfaces only see opaque geometry through it, never each other. This is the fastest option and matches Godot's historical behavior.
+		</constant>
+		<constant name="SCREEN_TEXTURE_COPY_MODE_PER_MESH" value="1" enum="ScreenTextureCopyMode">
+			Copy the screen texture again before each geometry instance that samples it, so overlapping transparent meshes can see each other. Surfaces belonging to the same instance share a single copy.
+		</constant>
+		<constant name="SCREEN_TEXTURE_COPY_MODE_PER_DRAW_CALL" value="2" enum="ScreenTextureCopyMode">
+			Copy the screen texture again before each individual surface that samples it, so overlapping surfaces of the same mesh can also see each other. This is the most accurate and the most expensive option.
+		</constant>
+		<constant name="SCREEN_TEXTURE_COPY_MODE_MAX" value="3" enum="ScreenTextureCopyMode">
+			Represents the size of the [enum ScreenTextureCopyMode] enum.
 		</constant>
 		<constant name="PARTICLES_MODE_2D" value="0" enum="ParticlesMode">
 			2D particles.

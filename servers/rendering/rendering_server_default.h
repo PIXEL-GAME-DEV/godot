@@ -984,6 +984,8 @@ public:
 
 	FUNC1(gi_set_use_half_resolution, bool)
 
+	FUNC1(screen_texture_set_copy_mode, RSE::ScreenTextureCopyMode)
+
 #undef server_name
 #undef ServerName
 //from now on, calls forwarded to this singleton

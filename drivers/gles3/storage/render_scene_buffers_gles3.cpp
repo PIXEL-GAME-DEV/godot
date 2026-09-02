@@ -101,7 +101,11 @@ GLuint RenderSceneBuffersGLES3::_rt_get_cached_fbo(GLuint p_color, GLuint p_dept
 	glGenFramebuffers(1, &new_fbo.fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, new_fbo.fbo);
 
-	_rt_attach_textures(p_color, p_depth, p_samples, p_view_count, true);
+	// The depth buffer may be supplied externally, e.g. an XR depth swapchain image without a stencil
+	// component, in which case attaching it as depth/stencil would leave this framebuffer incomplete.
+	const bool depth_has_stencil = GLES3::TextureStorage::get_singleton()->render_target_get_depth_has_stencil(render_target);
+
+	_rt_attach_textures(p_color, p_depth, p_samples, p_view_count, depth_has_stencil);
 
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -198,7 +202,10 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 		_clear_intermediate_buffers();
 	}
 
-	if ((!use_internal_buffer || internal3d.color != 0) && (msaa3d.mode == RSE::VIEWPORT_MSAA_DISABLED || msaa3d.color != 0)) {
+	// Note the msaa3d.fbo test: when MSAA resolves in tile memory the MSAA framebuffer has the internal
+	// textures attached and msaa3d.color is never allocated, so testing msaa3d.color alone would miss the
+	// early-out and leak a framebuffer on every call.
+	if ((!use_internal_buffer || internal3d.color != 0) && (msaa3d.mode == RSE::VIEWPORT_MSAA_DISABLED || msaa3d.color != 0 || msaa3d.fbo != 0)) {
 		// already setup!
 		return;
 	}
@@ -538,6 +545,14 @@ void RenderSceneBuffersGLES3::check_backbuffer(bool p_need_color, bool p_need_de
 		WARN_PRINT("Could not create 3D back buffers, status: " + texture_storage->get_framebuffer_error(status));
 	}
 
+	if (use_multiview && backbuffer3d.fbo != 0 && backbuffer3d_blit_read_fbo == 0 && backbuffer3d_blit_draw_fbo == 0) {
+		// glBlitFramebuffer cannot read from or write to multiview attachments, so copying into the back buffer
+		// has to go one view at a time through these plain framebuffers. They are cached because the copy can
+		// run many times per frame when the screen texture is refreshed during the transparent pass.
+		glGenFramebuffers(1, &backbuffer3d_blit_read_fbo);
+		glGenFramebuffers(1, &backbuffer3d_blit_draw_fbo);
+	}
+
 	glBindTexture(texture_target, 0);
 	glBindFramebuffer(GL_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
 }
@@ -546,6 +561,16 @@ void RenderSceneBuffersGLES3::_clear_back_buffers() {
 	if (backbuffer3d.fbo) {
 		glDeleteFramebuffers(1, &backbuffer3d.fbo);
 		backbuffer3d.fbo = 0;
+	}
+
+	if (backbuffer3d_blit_read_fbo) {
+		glDeleteFramebuffers(1, &backbuffer3d_blit_read_fbo);
+		backbuffer3d_blit_read_fbo = 0;
+	}
+
+	if (backbuffer3d_blit_draw_fbo) {
+		glDeleteFramebuffers(1, &backbuffer3d_blit_draw_fbo);
+		backbuffer3d_blit_draw_fbo = 0;
 	}
 
 	if (backbuffer3d.color != 0) {
@@ -672,6 +697,60 @@ GLuint RenderSceneBuffersGLES3::get_render_fbo() {
 	}
 
 	return rt_fbo;
+}
+
+GLuint RenderSceneBuffersGLES3::get_render_color() {
+	GLES3::TextureStorage *texture_storage = GLES3::TextureStorage::get_singleton();
+
+	_check_render_buffers();
+
+	// The branch order must mirror get_render_fbo().
+	if (!msaa3d.check_fbo_cache && msaa3d.fbo != 0) {
+		if (msaa3d.color != 0) {
+			// The single-view fallback allocates renderbuffers rather than textures; report those as
+			// unavailable. Multiview always uses a GL_TEXTURE_2D_MULTISAMPLE_ARRAY here.
+			return view_count > 1 ? msaa3d.color : 0;
+		}
+
+		// MSAA resolving in tile memory: msaa3d.fbo has the internal textures attached and msaa3d.color is
+		// never allocated.
+		return internal3d.color;
+	} else if (!msaa3d.check_fbo_cache && internal3d.fbo != 0) {
+		return internal3d.color;
+	}
+
+	// With the FBO cache MSAA is implicit, so the render target's own texture is what gets resolved into.
+	return texture_storage->render_target_get_color(render_target);
+}
+
+GLuint RenderSceneBuffersGLES3::get_render_depth() {
+	GLES3::TextureStorage *texture_storage = GLES3::TextureStorage::get_singleton();
+
+	_check_render_buffers();
+
+	if (!msaa3d.check_fbo_cache && msaa3d.fbo != 0) {
+		if (msaa3d.depth != 0) {
+			return view_count > 1 ? msaa3d.depth : 0;
+		}
+
+		return internal3d.depth;
+	} else if (!msaa3d.check_fbo_cache && internal3d.fbo != 0) {
+		return internal3d.depth;
+	}
+
+	return texture_storage->render_target_get_depth(render_target);
+}
+
+bool RenderSceneBuffersGLES3::get_render_depth_has_stencil() {
+	_check_render_buffers();
+
+	if (!msaa3d.check_fbo_cache && (msaa3d.fbo != 0 || internal3d.fbo != 0)) {
+		// Depth buffers we allocate ourselves always use a combined depth/stencil format.
+		return true;
+	}
+
+	// The render target's depth may be supplied externally, e.g. an XR depth swapchain image without stencil.
+	return GLES3::TextureStorage::get_singleton()->render_target_get_depth_has_stencil(render_target);
 }
 
 #endif // GLES3_ENABLED

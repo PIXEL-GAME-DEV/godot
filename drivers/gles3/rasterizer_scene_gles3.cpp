@@ -2884,34 +2884,7 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 	}
 
 	if (scene_state.used_screen_texture || scene_state.used_depth_texture) {
-		rb->check_backbuffer(scene_state.used_screen_texture, scene_state.used_depth_texture);
-		Size2i size = rb->get_internal_size();
-		GLuint backbuffer_fbo = rb->get_backbuffer_fbo();
-		GLuint backbuffer = rb->get_backbuffer();
-		GLuint backbuffer_depth = rb->get_backbuffer_depth();
-
-		if (backbuffer_fbo != 0) {
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-			glReadBuffer(GL_COLOR_ATTACHMENT0);
-			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backbuffer_fbo);
-			if (scene_state.used_screen_texture) {
-				glBlitFramebuffer(0, 0, size.x, size.y,
-						0, 0, size.x, size.y,
-						GL_COLOR_BUFFER_BIT, GL_NEAREST);
-				glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 6);
-				glBindTexture(GL_TEXTURE_2D, backbuffer);
-			}
-			if (scene_state.used_depth_texture) {
-				glBlitFramebuffer(0, 0, size.x, size.y,
-						0, 0, size.x, size.y,
-						GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
-				glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
-				glBindTexture(GL_TEXTURE_2D, backbuffer_depth);
-			}
-		}
-
-		// Bound framebuffer may have changed, so change it back
-		glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+		_copy_to_backbuffer(rb, fbo, scene_state.used_screen_texture, scene_state.used_depth_texture);
 	}
 
 	RENDER_TIMESTAMP("Render 3D Transparent Pass");
@@ -2920,7 +2893,61 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 	//Render transparent pass
 	RenderListParameters render_list_params_alpha(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), reverse_cull, spec_constant_base_flags, use_wireframe);
 
-	_render_list_template<PASS_MODE_COLOR_TRANSPARENT>(&render_list_params_alpha, &render_data, 0, render_list[RENDER_LIST_ALPHA].elements.size(), true);
+	// By default the screen texture is copied only once, above, so transparent surfaces cannot see each other
+	// through it. The other modes draw the alpha list in segments and re-blit the backbuffer in between, so
+	// later surfaces see the ones drawn behind them. Each extra copy costs a full screen blit and forces the
+	// per-material state caching in _render_list_template to restart, so this is opt-in.
+	const uint32_t element_count = uint32_t(render_list[RENDER_LIST_ALPHA].elements.size());
+	const bool split_transparent_pass = screen_texture_copy_mode != RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT && scene_state.used_screen_texture && element_count > 0;
+
+	if (!split_transparent_pass) {
+		_render_list_template<PASS_MODE_COLOR_TRANSPARENT>(&render_list_params_alpha, &render_data, 0, element_count, true);
+	} else {
+		// In per-mesh mode, consecutive screen texture surfaces belonging to the same geometry instance
+		// (one MeshInstance3D) share a single copy instead of getting one each.
+		const bool group_by_instance = screen_texture_copy_mode == RSE::SCREEN_TEXTURE_COPY_MODE_PER_MESH;
+
+		GeometryInstanceSurface *const *elements = render_list_params_alpha.elements;
+
+		// The geometry instance the most recent copy was made for. Only meaningful in per-mesh mode.
+		const GeometryInstanceGLES3 *copy_owner = nullptr;
+		uint32_t from_element = 0;
+
+		while (from_element < element_count) {
+			// Grow the current segment until we reach a surface that needs a fresh copy. The first element of
+			// a segment always joins it: either it is the surface we just copied for, or it is the very first
+			// element, which the copy made above already covers.
+			uint32_t to_element = from_element;
+
+			while (to_element < element_count) {
+				const GeometryInstanceSurface *surface = elements[to_element];
+				const bool samples_screen_texture = surface->flags & GeometryInstanceSurface::FLAG_USES_SCREEN_TEXTURE;
+
+				if (samples_screen_texture) {
+					if (to_element > from_element && !(group_by_instance && surface->owner == copy_owner)) {
+						// This surface needs to see everything drawn so far. End the segment before it.
+						break;
+					}
+
+					copy_owner = surface->owner;
+				}
+
+				to_element++;
+			}
+
+			_render_list_template<PASS_MODE_COLOR_TRANSPARENT>(&render_list_params_alpha, &render_data, from_element, to_element, true);
+
+			from_element = to_element;
+
+			if (from_element < element_count) {
+				RENDER_TIMESTAMP("Copy Screen Texture (Transparent)");
+
+				// Only the color buffer needs refreshing; the depth texture is a snapshot of the opaque pass and
+				// transparent surfaces do not write depth.
+				_copy_to_backbuffer(rb, fbo, true, false);
+			}
+		}
+	}
 
 	scene_state.enable_gl_stencil_test(false);
 
@@ -4322,6 +4349,133 @@ void RasterizerSceneGLES3::_render_buffers_debug_draw(Ref<RenderSceneBuffersGLES
 void RasterizerSceneGLES3::gi_set_use_half_resolution(bool p_enable) {
 }
 
+void RasterizerSceneGLES3::screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) {
+	ERR_FAIL_INDEX_MSG(p_mode, RSE::SCREEN_TEXTURE_COPY_MODE_MAX, "Invalid screen texture copy mode, please see RenderingServer's ScreenTextureCopyMode enum.");
+
+	screen_texture_copy_mode = p_mode;
+}
+
+void RasterizerSceneGLES3::_copy_to_backbuffer(Ref<RenderSceneBuffersGLES3> p_render_buffers, GLuint p_fbo, bool p_copy_screen_texture, bool p_copy_depth_texture) {
+	GLES3::Config *config = GLES3::Config::get_singleton();
+
+	// check_backbuffer() leaves the currently active texture unit unbound, so point that unit at one this
+	// function rebinds itself rather than at whatever the last draw call happened to leave active.
+	glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - (p_copy_screen_texture ? 6 : 7));
+
+	p_render_buffers->check_backbuffer(p_copy_screen_texture, p_copy_depth_texture);
+
+	// Must match the condition check_backbuffer() uses to pick the back buffer's texture target.
+	const uint32_t view_count = p_render_buffers->get_view_count();
+	const bool use_multiview = view_count > 1 && config->multiview_supported;
+	const GLenum texture_target = use_multiview ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+
+	const Size2i size = p_render_buffers->get_internal_size();
+	const GLuint backbuffer_fbo = p_render_buffers->get_backbuffer_fbo();
+	const GLuint backbuffer = p_render_buffers->get_backbuffer();
+	const GLuint backbuffer_depth = p_render_buffers->get_backbuffer_depth();
+
+	if (backbuffer_fbo != 0) {
+		if (!use_multiview) {
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, p_fbo);
+			glReadBuffer(GL_COLOR_ATTACHMENT0);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backbuffer_fbo);
+
+			if (p_copy_screen_texture) {
+				// When MSAA is enabled p_fbo is the multisample framebuffer, so this blit also resolves it.
+				glBlitFramebuffer(0, 0, size.x, size.y,
+						0, 0, size.x, size.y,
+						GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			}
+			if (p_copy_depth_texture) {
+				glBlitFramebuffer(0, 0, size.x, size.y,
+						0, 0, size.x, size.y,
+						GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+			}
+		} else {
+			// glBlitFramebuffer raises GL_INVALID_FRAMEBUFFER_OPERATION when the read framebuffer has more than
+			// one view, and only ever writes the first view of a multiview draw framebuffer. Both p_fbo and the
+			// back buffer FBO are multiview here, so the copy has to go through plain framebuffers with one
+			// layer attached at a time. Same approach as the multiview resolve in _render_post_processing().
+			const GLuint read_fbo = p_render_buffers->get_backbuffer_blit_read_fbo();
+			const GLuint draw_fbo = p_render_buffers->get_backbuffer_blit_draw_fbo();
+			const GLuint render_color = p_render_buffers->get_render_color();
+			const GLuint render_depth = p_render_buffers->get_render_depth();
+
+			// An externally supplied depth buffer, such as an XR depth swapchain image, may have no stencil,
+			// in which case it has to go to GL_DEPTH_ATTACHMENT instead. The back buffer we allocate always
+			// has stencil. Bits missing from either side of a blit are silently ignored.
+			const GLenum read_depth_attachment = p_render_buffers->get_render_depth_has_stencil() ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
+
+			const bool can_copy = read_fbo != 0 && draw_fbo != 0 &&
+					(!p_copy_screen_texture || render_color != 0) &&
+					(!p_copy_depth_texture || render_depth != 0);
+
+			if (can_copy) {
+				// On desktop GL a framebuffer whose read/draw buffer points at an attachment that does not
+				// exist is incomplete, so for a depth-only copy both have to be set to GL_NONE.
+				const GLenum color_buffer = p_copy_screen_texture ? GL_COLOR_ATTACHMENT0 : GL_NONE;
+
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+				glReadBuffer(color_buffer);
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+				glDrawBuffers(1, &color_buffer);
+
+				for (uint32_t v = 0; v < view_count; v++) {
+					if (p_copy_screen_texture) {
+						glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, render_color, 0, v);
+						glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, backbuffer, 0, v);
+					}
+					if (p_copy_depth_texture) {
+						glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, read_depth_attachment, render_depth, 0, v);
+						glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, backbuffer_depth, 0, v);
+					}
+
+					if (v == 0) {
+						// The attachments are the same shape for every view, so one check covers them all.
+						// Without this a mismatch would just silently produce a black screen texture.
+						GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+						if (status == GL_FRAMEBUFFER_COMPLETE) {
+							status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+						}
+
+						if (status != GL_FRAMEBUFFER_COMPLETE) {
+							WARN_PRINT_ONCE("Could not copy the 3D screen texture for multiview rendering, status: " + GLES3::TextureStorage::get_singleton()->get_framebuffer_error(status));
+							break;
+						}
+					}
+
+					if (p_copy_screen_texture) {
+						glBlitFramebuffer(0, 0, size.x, size.y,
+								0, 0, size.x, size.y,
+								GL_COLOR_BUFFER_BIT, GL_NEAREST);
+					}
+					if (p_copy_depth_texture) {
+						glBlitFramebuffer(0, 0, size.x, size.y,
+								0, 0, size.x, size.y,
+								GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+					}
+				}
+			} else {
+				WARN_PRINT_ONCE("Could not copy the 3D screen texture: the render buffers cannot be sampled per view.");
+			}
+		}
+
+		// The scene shader declares these as sampler2DArray under USE_MULTIVIEW, so the target has to match
+		// the one check_backbuffer() allocated the texture with.
+		if (p_copy_screen_texture) {
+			glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 6);
+			glBindTexture(texture_target, backbuffer);
+		}
+		if (p_copy_depth_texture) {
+			glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
+			glBindTexture(texture_target, backbuffer_depth);
+		}
+	}
+
+	// Bound framebuffer may have changed, so change it back
+	glBindFramebuffer(GL_FRAMEBUFFER, p_fbo);
+}
+
 void RasterizerSceneGLES3::screen_space_roughness_limiter_set_active(bool p_enable, float p_amount, float p_curve) {
 }
 
@@ -4545,6 +4699,9 @@ RasterizerSceneGLES3::RasterizerSceneGLES3() {
 	positional_soft_shadow_filter_set_quality((RSE::ShadowQuality)(int)GLOBAL_GET("rendering/lights_and_shadows/positional_shadow/soft_shadow_filter_quality"));
 	directional_soft_shadow_filter_set_quality((RSE::ShadowQuality)(int)GLOBAL_GET("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality"));
 	lightmaps_set_bicubic_filter(GLOBAL_GET("rendering/lightmapping/lightmap_gi/use_bicubic_filter"));
+
+	// Explicitly qualified: this runs from a constructor, where virtual dispatch would not reach an override.
+	RasterizerSceneGLES3::screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode(int(GLOBAL_GET("rendering/transparency/screen_texture/copy_mode"))));
 
 	{
 		// Setup Lights

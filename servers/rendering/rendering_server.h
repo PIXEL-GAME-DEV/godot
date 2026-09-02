@@ -414,6 +414,10 @@ public:
 
 	virtual void sdfgi_reset() = 0;
 
+	/* TRANSPARENCY API */
+
+	virtual void screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) = 0;
+
 	/* LIGHTMAP API */
 
 	virtual RID lightmap_create() = 0;
@@ -1108,6 +1112,7 @@ VARIANT_ENUM_CAST_EXT(RSE::LightProjectorFilter, RenderingServer::LightProjector
 VARIANT_ENUM_CAST_EXT(RSE::ReflectionProbeUpdateMode, RenderingServer::ReflectionProbeUpdateMode);
 VARIANT_ENUM_CAST_EXT(RSE::ReflectionProbeAmbientMode, RenderingServer::ReflectionProbeAmbientMode);
 VARIANT_ENUM_CAST_EXT(RSE::VoxelGIQuality, RenderingServer::VoxelGIQuality);
+VARIANT_ENUM_CAST_EXT(RSE::ScreenTextureCopyMode, RenderingServer::ScreenTextureCopyMode);
 VARIANT_ENUM_CAST_EXT(RSE::DecalTexture, RenderingServer::DecalTexture);
 VARIANT_ENUM_CAST_EXT(RSE::DecalFilter, RenderingServer::DecalFilter);
 VARIANT_ENUM_CAST_EXT(RSE::ParticlesMode, RenderingServer::ParticlesMode);

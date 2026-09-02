@@ -82,6 +82,12 @@ public:
 
 	FBDEF backbuffer3d; // our back buffer
 
+	// Plain, non-multiview FBOs used to blit the scene into the back buffer one view at a time.
+	// glBlitFramebuffer is invalid on framebuffers with multiview attachments, so under multiview each layer
+	// has to be attached individually with glFramebufferTextureLayer. Only created when view_count > 1.
+	GLuint backbuffer3d_blit_read_fbo = 0;
+	GLuint backbuffer3d_blit_draw_fbo = 0;
+
 	// Buffers for our glow implementation
 	struct GLOW {
 		GLES3::Glow::Level levels[4];
@@ -116,6 +122,13 @@ public:
 	void check_glow_buffers(); // Check if we need to initialize our glow buffers.
 
 	GLuint get_render_fbo();
+	// The color and depth textures attached to the framebuffer returned by get_render_fbo(). Return 0 when
+	// that framebuffer uses renderbuffers instead of textures, which only happens without multiview.
+	GLuint get_render_color();
+	GLuint get_render_depth();
+	// Whether get_render_depth()'s texture carries a stencil component. External depth buffers, such as an XR
+	// depth swapchain image, may not, in which case it must be attached to GL_DEPTH_ATTACHMENT.
+	bool get_render_depth_has_stencil();
 	GLuint get_msaa3d_fbo() {
 		_check_render_buffers();
 		return msaa3d.fbo;
@@ -147,6 +160,8 @@ public:
 	GLuint get_backbuffer_fbo() const { return backbuffer3d.fbo; }
 	GLuint get_backbuffer() const { return backbuffer3d.color; }
 	GLuint get_backbuffer_depth() const { return backbuffer3d.depth; }
+	GLuint get_backbuffer_blit_read_fbo() const { return backbuffer3d_blit_read_fbo; }
+	GLuint get_backbuffer_blit_draw_fbo() const { return backbuffer3d_blit_draw_fbo; }
 
 	const GLES3::Glow::Level *get_glow_buffers() const { return &glow.levels[0]; }
 

@@ -2424,7 +2424,75 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		RID alpha_framebuffer = rb_data.is_valid() ? rb_data->get_color_pass_fb(transparent_color_pass_flags) : color_only_framebuffer;
 		RenderListParameters render_list_params(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].element_info.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), reverse_cull, PASS_MODE_COLOR, transparent_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
-		_render_list_with_draw_list(&render_list_params, alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+
+		// By default the screen texture is copied only once, right before the transparent pass begins, so
+		// transparent surfaces cannot see each other through it. The other modes break the transparent pass into
+		// several draw lists and refresh the copy in between, so later surfaces see the ones drawn behind them.
+		// Every refresh costs a screen blit, a mipmap chain rebuild and (with MSAA) a resolve, per view, which is
+		// why this is opt-in.
+		const RSE::ScreenTextureCopyMode copy_mode = get_screen_texture_copy_mode();
+		bool split_transparent_pass = copy_mode != RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT && scene_state.used_screen_texture && rb_data.is_valid() && rb->has_internal_texture() && render_list_params.element_count > 0;
+
+		if (!split_transparent_pass) {
+			_render_list_with_draw_list(&render_list_params, alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+		} else {
+			RENDER_TIMESTAMP("Render 3D Transparent Pass (Split Screen Texture Copies)");
+
+			// In per-mesh mode, consecutive screen texture surfaces that belong to the same geometry instance
+			// (one MeshInstance3D) share a single copy instead of getting one each.
+			const bool group_by_instance = copy_mode == RSE::SCREEN_TEXTURE_COPY_MODE_PER_MESH;
+
+			RD::FramebufferFormatID fb_format = RD::get_singleton()->framebuffer_get_format(alpha_framebuffer);
+			render_list_params.framebuffer_format = fb_format;
+
+			GeometryInstanceSurfaceDataCache *const *elements = render_list_params.elements;
+			const uint32_t element_count = uint32_t(render_list_params.element_count);
+
+			// The geometry instance the most recent copy was made for. Only meaningful in per-mesh mode.
+			const GeometryInstanceForwardClustered *copy_owner = nullptr;
+			uint32_t from_element = 0;
+
+			while (from_element < element_count) {
+				// Grow the current segment until we reach a surface that needs a fresh copy. The first element of
+				// a segment always joins it: either it is the surface we just copied for, or it is the very first
+				// element of the list, which is covered by the copy made before the pass started.
+				uint32_t to_element = from_element;
+
+				while (to_element < element_count) {
+					const GeometryInstanceSurfaceDataCache *surface = elements[to_element];
+					const bool samples_screen_texture = surface->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_SCREEN_TEXTURE;
+
+					if (samples_screen_texture) {
+						if (to_element > from_element && !(group_by_instance && surface->owner == copy_owner)) {
+							// This surface needs to see everything drawn so far. End the segment before it.
+							break;
+						}
+
+						copy_owner = surface->owner;
+					}
+
+					to_element++;
+				}
+
+				RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+				_render_list(draw_list, fb_format, &render_list_params, from_element, to_element);
+				RD::get_singleton()->draw_list_end();
+
+				from_element = to_element;
+
+				if (from_element < element_count) {
+					// The copy reads from the resolved internal texture, so MSAA has to be resolved again to pick
+					// up the transparent surfaces drawn since the last copy.
+					if (use_msaa) {
+						for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+							RD::get_singleton()->texture_resolve_multisample(rb->get_color_msaa(v), rb->get_internal_texture(v));
+						}
+					}
+
+					_render_buffers_copy_screen_texture(p_render_data);
+				}
+			}
+		}
 	}
 
 	RD::get_singleton()->draw_command_end_label();

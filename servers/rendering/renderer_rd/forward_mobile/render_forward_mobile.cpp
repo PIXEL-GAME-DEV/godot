@@ -1365,9 +1365,68 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 				render_list_params.framebuffer_format = fb_format;
 				render_list_params.subpass = RD::get_singleton()->draw_list_get_current_pass(); // Should now always be 0.
 
-				draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
-				_render_list(draw_list, fb_format, &render_list_params, 0, render_list_params.element_count);
-				RD::get_singleton()->draw_list_end();
+				// By default the screen texture is copied only once, above, so transparent surfaces cannot see
+				// each other through it. The other modes break the transparent pass into several draw lists and
+				// refresh the copy in between. On a tiled GPU each extra draw list stores and reloads the whole
+				// tile (color and depth) on top of the MSAA resolve, so this is considerably more expensive here
+				// than it is on desktop and is strictly opt-in.
+				const RSE::ScreenTextureCopyMode copy_mode = get_screen_texture_copy_mode();
+				const bool split_transparent_pass = copy_mode != RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT && scene_state.used_screen_texture && rb_data.is_valid() && rb->has_internal_texture() && render_list_params.element_count > 0;
+
+				if (!split_transparent_pass) {
+					draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
+					_render_list(draw_list, fb_format, &render_list_params, 0, render_list_params.element_count);
+					RD::get_singleton()->draw_list_end();
+				} else {
+					// In per-mesh mode, consecutive screen texture surfaces belonging to the same geometry
+					// instance (one MeshInstance3D) share a single copy instead of getting one each.
+					const bool group_by_instance = copy_mode == RSE::SCREEN_TEXTURE_COPY_MODE_PER_MESH;
+
+					GeometryInstanceSurfaceDataCache *const *elements = render_list_params.elements;
+					const uint32_t element_count = uint32_t(render_list_params.element_count);
+
+					// The geometry instance the most recent copy was made for. Only meaningful in per-mesh mode.
+					const GeometryInstanceForwardMobile *copy_owner = nullptr;
+					uint32_t from_element = 0;
+
+					while (from_element < element_count) {
+						// Grow the current segment until we reach a surface that needs a fresh copy. The first
+						// element of a segment always joins it: either it is the surface we just copied for, or
+						// it is the very first element, which the copy made above already covers.
+						uint32_t to_element = from_element;
+
+						while (to_element < element_count) {
+							const GeometryInstanceSurfaceDataCache *surface = elements[to_element];
+							const bool samples_screen_texture = surface->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_SCREEN_TEXTURE;
+
+							if (samples_screen_texture) {
+								if (to_element > from_element && !(group_by_instance && surface->owner == copy_owner)) {
+									// This surface needs to see everything drawn so far. End the segment before it.
+									break;
+								}
+
+								copy_owner = surface->owner;
+							}
+
+							to_element++;
+						}
+
+						draw_list = RD::get_singleton()->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0, p_render_data->render_region, breadcrumb);
+						_render_list(draw_list, fb_format, &render_list_params, from_element, to_element);
+						RD::get_singleton()->draw_list_end();
+
+						from_element = to_element;
+
+						if (from_element < element_count) {
+							RENDER_TIMESTAMP("Copy Screen Texture (Transparent)");
+
+							// The framebuffer declares resolve attachments, so ending the draw list has already
+							// resolved MSAA into the internal texture the copy reads from. Unlike the Forward+
+							// renderer, no explicit texture_resolve_multisample is needed here.
+							_render_buffers_copy_screen_texture(p_render_data);
+						}
+					}
+				}
 
 				RD::get_singleton()->draw_command_end_label(); // Render Transparent Pass
 			}

@@ -334,6 +334,8 @@ public:
 	virtual Ref<RenderSceneBuffers> render_buffers_create() = 0;
 	virtual void gi_set_use_half_resolution(bool p_enable) = 0;
 
+	virtual void screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) = 0;
+
 	virtual void screen_space_roughness_limiter_set_active(bool p_enable, float p_amount, float p_limit) = 0;
 	virtual bool screen_space_roughness_limiter_is_active() const = 0;
 

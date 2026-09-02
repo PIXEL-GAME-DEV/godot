@@ -761,6 +761,13 @@ protected:
 	float screen_space_roughness_limiter_amount = 0.25;
 	float screen_space_roughness_limiter_limit = 0.18;
 
+	// How often the screen texture is refreshed during the transparent pass.
+	RSE::ScreenTextureCopyMode screen_texture_copy_mode = RSE::SCREEN_TEXTURE_COPY_MODE_DEFAULT;
+
+	// Blits the color and/or depth buffer into the backbuffer that hint_screen_texture / hint_depth_texture
+	// sample from, then restores the scene framebuffer binding.
+	void _copy_to_backbuffer(Ref<RenderSceneBuffersGLES3> p_render_buffers, GLuint p_fbo, bool p_copy_screen_texture, bool p_copy_depth_texture);
+
 	void _render_buffers_debug_draw(Ref<RenderSceneBuffersGLES3> p_render_buffers, RID p_shadow_atlas, GLuint p_fbo);
 
 	/* Camera Attributes */
@@ -968,6 +975,8 @@ public:
 
 	Ref<RenderSceneBuffers> render_buffers_create() override;
 	void gi_set_use_half_resolution(bool p_enable) override;
+
+	void screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) override;
 
 	void screen_space_roughness_limiter_set_active(bool p_enable, float p_amount, float p_curve) override;
 	bool screen_space_roughness_limiter_is_active() const override;

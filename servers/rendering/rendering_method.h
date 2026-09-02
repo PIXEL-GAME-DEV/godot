@@ -339,6 +339,8 @@ public:
 
 	virtual void gi_set_use_half_resolution(bool p_enable) = 0;
 
+	virtual void screen_texture_set_copy_mode(RSE::ScreenTextureCopyMode p_mode) = 0;
+
 	virtual void set_debug_draw_mode(RSE::ViewportDebugDraw p_debug_draw) = 0;
 
 	virtual TypedArray<Image> bake_render_uv2(RID p_base, const TypedArray<RID> &p_material_overrides, const Size2i &p_image_size) = 0;
